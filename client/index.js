@@ -1,210 +1,27 @@
-var catNames = require('cat-names')
 var debug = require('debug')
 var dragDrop = require('drag-drop')
-var hat = require('hat')
 var path = require('path')
 var Peer = require('simple-peer')
-var thunky = require('thunky')
-var Tracker = require('bittorrent-tracker/client')
 var videostream = require('videostream')
-var WebTorrent = require('webtorrent')
-var xhr = require('xhr')
-
-var TRACKER_URL = 'wss://tracker.fastcast.nz'
-
-global.WEBTORRENT_ANNOUNCE = [ TRACKER_URL ]
+const { username, hat, peerId, color } = require('./user') 
+const { getClient } = require('./getClient')
 
 if (!Peer.WEBRTC_SUPPORT) {
   window.alert('This browser is unsupported. Please use a browser with WebRTC support.')
 }
-
-var getClient = thunky(function (cb) {
-  xhr('http://localhost:9100/rtcConfig', function (err, res) {
-    var rtcConfig
-    if (err || res.statusCode !== 200) {
-      window.alert('Could not get WebRTC config from server. Using default (without TURN).')
-    } else {
-      try {
-        rtcConfig = JSON.parse(res.body)
-      } catch (err) {
-        window.alert('Got invalid WebRTC config from server: ' + res.body)
-      }
-      if (rtcConfig) debug('got rtc config: %o', rtcConfig)
-    }
-
-    var client = new WebTorrent({ peerId: peerId, rtcConfig: rtcConfig })
-    client.on('error', function (err) {
-      window.alert(err.message || err)
-    })
-    client.on('warning', function (err) {
-      console.error(err.message || err)
-    })
-    cb(null, client)
-  })
-})
 
 getClient(function (err, client) {
   if (err) return window.alert(err.message || err)
   window.client = client
 })
 
-var username = catNames.random()
+let { currentPathId, state, peers, torrentData } = require('./states')
 
-// pick random stroke color
-var color = 'rgb(' + hat(8, 10) + ',' + hat(8, 10) + ',' + hat(8, 10) + ')'
-
-var currentPathId = null
-var state = {}
-var peers = []
-var peerId = new Buffer(hat(160), 'hex')
-
-var torrentData = {}
-
-// create canvas
-var canvas = document.createElement('canvas')
-var ctx = canvas.getContext('2d')
-document.body.appendChild(canvas)
+const { canvas, setupCanvas, redraw } = require('./canvas')
 
 // set canvas settings and size
-setupCanvas()
+setupCanvas(state, torrentData, peers)
 window.addEventListener('resize', setupCanvas)
-
-function setupCanvas () {
-  // calculate scale factor for retina displays
-  var devicePixelRatio = window.devicePixelRatio || 1
-  var backingStoreRatio = ctx.webkitBackingStorePixelRatio ||
-    ctx.mozBackingStorePixelRatio ||
-    ctx.msBackingStorePixelRatio ||
-    ctx.oBackingStorePixelRatio ||
-    ctx.backingStorePixelRatio || 1
-  var ratio = devicePixelRatio / backingStoreRatio
-
-  // set canvas width and scale factor
-  canvas.width = window.innerWidth * ratio
-  canvas.height = window.innerHeight * ratio
-  canvas.style.width = window.innerWidth + 'px'
-  canvas.style.height = window.innerHeight + 'px'
-  ctx.scale(ratio, ratio)
-
-  // set stroke options
-  ctx.lineCap = 'round'
-  ctx.lineJoin = 'round'
-  ctx.lineWidth = 4
-
-  // set font options
-  ctx.fillStyle = 'rgb(255,0,0)'
-  ctx.font = '16px sans-serif'
-  redraw()
-}
-
-function redraw () {
-  // clear canvas
-  ctx.clearRect(0, 0, canvas.width, canvas.height)
-
-  // draw the current state
-  Object.keys(state).forEach(function (id) {
-    var data = state[id]
-
-    // draw paths
-    if (data.pts) {
-      ctx.beginPath()
-      ctx.strokeStyle = data.color
-      data.pts.forEach(function (point, i) {
-        if (i === 0) ctx.moveTo(point.x, point.y)
-        else ctx.lineTo(point.x, point.y)
-      })
-      ctx.stroke()
-    }
-
-    // draw images/video/audio
-    if (data.infoHash) {
-      if (!torrentData[data.infoHash]) {
-        torrentData[data.infoHash] = { complete: false }
-        getClient(function (err, client) {
-          if (err) return window.alert(err.message || err)
-          client.download(data.infoHash, function (torrent) {
-            var file = torrent.files[0]
-            if (!file) return
-            if (data.img) {
-              file.getBuffer(function (err, buf) {
-                if (err) return console.error(err)
-                toImage(buf, function (err, img) {
-                  if (err) return console.error(err)
-                  torrentData[data.infoHash] = { complete: true, img: img }
-                  redraw()
-                })
-              })
-            } else if (data.stream) {
-              torrentData[data.infoHash] = {
-                complete: true,
-                stream: true,
-                file: file
-              }
-              redraw()
-            }
-          })
-        })
-      }
-      if (torrentData[data.infoHash].complete) {
-        if (torrentData[data.infoHash].img) {
-          ctx.drawImage(
-            torrentData[data.infoHash].img,
-            data.pos.x - (data.width / 4), data.pos.y - (data.height / 4),
-            data.width / 2, data.height / 2
-          )
-        } else if (torrentData[data.infoHash].stream) {
-          console.log(torrentData[data.infoHash])
-          var extname = path.extname(torrentData[data.infoHash].file.name)
-          if (document.querySelector('#' + 'infoHash_' + data.infoHash)) return
-          var media
-          if (extname === '.mp4' || extname === '.m4v' || extname === '.webm') {
-            media = document.createElement('video')
-          } else if (extname === '.mp3') {
-            media = document.createElement('audio')
-          }
-
-          media.style.left = (data.pos.x - 150) + 'px'
-          media.style.top = (data.pos.y - 100) + 'px'
-          media.id = 'infoHash_' + data.infoHash
-          media.controls = true
-          media.autoplay = true
-          media.loop = true
-          document.body.appendChild(media)
-
-          var file = torrentData[data.infoHash].file
-          if (extname === '.mp4' || extname === '.m4v') {
-            videostream(file, media)
-          } else {
-            file.createReadStream().pipe(media)
-          }
-        }
-      } else {
-        ctx.fillStyle = 'rgb(210,210,210)'
-        var width = data.width
-        var height = data.height
-        console.log(width, height)
-        if (torrentData[data.infoHash].stream) {
-          width = 240
-          height = 135
-        }
-        ctx.fillRect(
-          data.pos.x - (width / 4), data.pos.y - (height / 4),
-          width / 2, height / 2
-        )
-      }
-    }
-  })
-
-  // draw usernames
-  peers.concat({ color: color, username: username })
-    .filter(function (peer) {
-      return !!peer.username
-    })
-    .forEach(function (peer, i) {
-      ctx.fillStyle = peer.color
-      ctx.fillText(peer.username, 20, window.innerHeight - 20 - (i * 20))
-    })
-}
 
 function broadcast (obj) {
   peers.forEach(function (peer) {
@@ -252,73 +69,8 @@ function onMove (e) {
     redraw()
   }
 }
-
-var tracker = new Tracker({
-  peerId: peerId,
-  announce: TRACKER_URL,
-  infoHash: new Buffer(20).fill('webrtc-whiteboard')
-})
-
+const { tracker } = require('./tracker')
 tracker.start()
-
-tracker.on('peer', function (peer) {
-  peers.push(peer)
-
-  if (peer.connected) onConnect()
-  else peer.once('connect', onConnect)
-
-  function onConnect () {
-    peer.on('data', onMessage)
-    peer.on('close', onClose)
-    peer.on('error', onClose)
-    peer.on('end', onClose)
-    peer.send(JSON.stringify({ username: username, color: color, state: state }))
-
-    function onClose () {
-      peer.removeListener('data', onMessage)
-      peer.removeListener('close', onClose)
-      peer.removeListener('error', onClose)
-      peer.removeListener('end', onClose)
-      peers.splice(peers.indexOf(peer), 1)
-      redraw()
-    }
-
-    function onMessage (data) {
-      try {
-        data = JSON.parse(data)
-      } catch (err) {
-        console.error(err.message)
-      }
-      if (data.username) {
-        peer.username = data.username
-        peer.color = data.color
-        redraw()
-      }
-
-      if (data.state) {
-        Object.keys(data.state)
-          .filter(function (id) {
-            return !state[id]
-          })
-          .forEach(function (id) {
-            state[id] = data.state[id]
-          })
-        redraw()
-      }
-
-      if (data.pt) {
-        if (!state[data.i]) state[data.i] = { pts: [], color: data.color }
-        state[data.i].pts.push(data.pt)
-        redraw()
-      }
-
-      if (data.infoHash) {
-        state[data.infoHash] = data
-        redraw()
-      }
-    }
-  }
-})
 
 dragDrop('body', function (files, pos) {
   getClient(function (err, client) {
