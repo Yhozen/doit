@@ -20,7 +20,7 @@ let { currentPathId, state, peers, torrentData } = require('./states')
 const { canvas, setupCanvas, redraw } = require('./canvas')
 
 // set canvas settings and size
-setupCanvas(state, torrentData, peers)
+setupCanvas()
 window.addEventListener('resize', setupCanvas)
 
 function broadcast (obj) {
