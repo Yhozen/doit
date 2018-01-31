@@ -3,8 +3,13 @@ var dragDrop = require('drag-drop')
 var path = require('path')
 var Peer = require('simple-peer')
 var videostream = require('videostream')
-const { username, hat, peerId, color } = require('./user') 
+let { currentPathId, state, peers, torrentData } = require('./states')
+const { username, peerId, color } = require('./user') 
 const { getClient } = require('./getClient')
+const { canvas, setupCanvas, redraw } = require('./canvas')
+const { tracker } = require('./tracker')
+const { broadcast } = require('./broadcast')
+const mouseEvents = require('./mouseEvents')
 
 if (!Peer.WEBRTC_SUPPORT) {
   window.alert('This browser is unsupported. Please use a browser with WebRTC support.')
@@ -15,62 +20,12 @@ getClient(function (err, client) {
   window.client = client
 })
 
-let { currentPathId, state, peers, torrentData } = require('./states')
-
-const { canvas, setupCanvas, redraw } = require('./canvas')
-
 // set canvas settings and size
 setupCanvas()
 window.addEventListener('resize', setupCanvas)
 
-function broadcast (obj) {
-  peers.forEach(function (peer) {
-    if (peer.connected) peer.send(JSON.stringify(obj))
-  })
-}
-
-canvas.addEventListener('mousedown', onDown)
-canvas.addEventListener('touchstart', onDown)
-
-function onDown (e) {
-  e.preventDefault()
-  currentPathId = hat(80)
-  var x = e.clientX || (e.changedTouches && e.changedTouches[0] && e.changedTouches[0].pageX) || 0
-  var y = e.clientY || (e.changedTouches && e.changedTouches[0] && e.changedTouches[0].pageY) || 0
-  var p1 = { x: x, y: y }
-  var p2 = {
-    x: x + 0.001,
-    y: y + 0.001
-  } // paint point on click
-
-  state[currentPathId] = { color: color, pts: [ p1, p2 ] }
-  broadcast({ i: currentPathId, pt: p1, color: color })
-  broadcast({ i: currentPathId, pt: p2 })
-  redraw()
-}
-
-document.body.addEventListener('mouseup', onUp)
-document.body.addEventListener('touchend', onUp)
-
-function onUp () {
-  currentPathId = null
-}
-
-canvas.addEventListener('mousemove', onMove)
-canvas.addEventListener('touchmove', onMove)
-
-function onMove (e) {
-  var x = e.clientX || (e.changedTouches && e.changedTouches[0] && e.changedTouches[0].pageX) || 0
-  var y = e.clientY || (e.changedTouches && e.changedTouches[0] && e.changedTouches[0].pageY) || 0
-  if (currentPathId) {
-    var pt = { x: x, y: y }
-    state[currentPathId].pts.push(pt)
-    broadcast({ i: currentPathId, pt: pt })
-    redraw()
-  }
-}
-const { tracker } = require('./tracker')
 tracker.start()
+mouseEvents.init()
 
 dragDrop('body', function (files, pos) {
   getClient(function (err, client) {
